@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>WASD로 사람 이동하는 게임 - 회색 배경, 경찰 도착 추가</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      height: 100vh;
+      cursor: none;
+      font-family: sans-serif;
+      position: relative;
+      background: #ccc; /* 회색 배경 */
+    }
+
+    .player, .robot, .thief, .police {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .player {
+      font-size: 38px;
+    }
+
+    .robot {
+      font-size: 40px;
+      filter: drop-shadow(0 0 6px #555);
+    }
+
+    .thief {
+      font-size: 36px;
+      filter: drop-shadow(0 0 6px crimson);
+    }
+
+    .police {
+      font-size: 40px;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .game-over {
+      position: fixed;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #222;
+      color: #fff;
+      padding: 30px 50px;
+      font-size: 32px;
+      border-radius: 10px;
+      display: none;
+      text-align: center;
+      z-index: 10;
+      white-space: pre-line;
+      font-weight: bold;
+    }
+
+    #restartBtn {
+      position: fixed;
+      top: 55%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 15px 40px;
+      font-size: 24px;
+      font-weight: bold;
+      background-color: #d32f2f;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      display: none;
+      z-index: 11;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+      transition: background-color 0.3s ease;
+    }
+
+    #restartBtn:hover {
+      background-color: #b71c1c;
+    }
+
+    #timer {
+      position: fixed;
+      top: 10px;
+      left: 50%;           /* 중앙 상단 가로 위치 */
+      transform: translateX(-50%); /* 가로 중앙 맞춤 */
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 24px;
+      font-weight: bold;
+      padding: 8px 15px;
+      border-radius: 8px;
+      user-select: none;
+      z-index: 20;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+<div id="timer">30</div>
+
+<div class="player">🧍</div>
+<div class="robot">🤖</div>
+
+<div id="thieves-container"></div>
+<div id="police-container"></div>
+
+<div class="game-over"></div>
+<button id="restartBtn">게임 다시 시작</button>
+
+<script>
+  const player = document.querySelector('.player');
+  const robot = document.querySelector('.robot');
+  const thievesContainer = document.getElementById('thieves-container');
+  const policeContainer = document.getElementById('police-container');
+  const gameOver = document.querySelector('.game-over');
+  const restartBtn = document.getElementById('restartBtn');
+  const timerDisplay = document.getElementById('timer');
+
+  let playerX, playerY;
+  let robotX, robotY;
+  let robotSpeed = 8;
+
+  const thiefStates = [];
+  const policeStates = [];
+
+  let running = true;
+  let animationId;
+  const bounceDuration = 600;
+  const gameDuration = 30;
+  let countdownInterval;
+  let spawnInterval;
+
+  const robotMinDist = 40;
+  const robotMaxDist = 60;
+
+  // WASD 상태 저장
+  const keys = {
+    w: false,
+    a: false,
+    s: false,
+    d: false
+  };
+
+  const playerSpeed = 2; // 사람 속도 (도둑 3보다 느림)
+
+  function getDistance(x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function createThief() {
+    const padding = 50;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    let x, y;
+
+    do {
+      x = Math.random() * (width - padding * 2) + padding;
+      y = Math.random() * (height - padding * 2) + padding;
+    } while (getDistance(x, y, playerX, playerY) < 400);
+
+    const thiefEl = document.createElement('div');
+    thiefEl.className = 'thief';
+    thiefEl.textContent = '🦹';
+    thievesContainer.appendChild(thiefEl);
+
+    const state = {
+      el: thiefEl,
+      x: x,
+      y: y,
+      isBouncing: false,
+      bounceDirX: 0,
+      bounceDirY: 0,
+      bounceTimeout: null,
+    };
+    thiefStates.push(state);
+    thiefEl.style.left = `${x}px`;
+    thiefEl.style.top = `${y}px`;
+  }
+
+  function removeAllThieves() {
+    thiefStates.forEach(state => {
+      if(state.bounceTimeout) clearTimeout(state.bounceTimeout);
+      if(state.el.parentNode) {
+        state.el.parentNode.removeChild(state.el);
+      }
+    });
+    thiefStates.length = 0;
+  }
+
+  function createPolice() {
+    const padding = 50;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    let x, y;
+
+    do {
+      x = Math.random() * (width - padding * 2) + padding;
+      y = Math.random() * (height - padding * 2) + padding;
+    } while (
+      getDistance(x, y, playerX, playerY) < 150 ||
+      thiefStates.some(t => getDistance(x, y, t.x, t.y) < 150) ||
+      getDistance(x, y, robotX, robotY) < 150
+    );
+
+    const policeEl = document.createElement('div');
+    policeEl.className = 'police';
+    policeEl.textContent = Math.random() < 0.5 ? '🚓' : '👮‍♂️';
+    policeContainer.appendChild(policeEl);
+
+    const state = {
+      el: policeEl,
+      x: x,
+      y: y
+    };
+    policeStates.push(state);
+    policeEl.style.left = `${x}px`;
+    policeEl.style.top = `${y}px`;
+  }
+
+  function removeAllPolice() {
+    policeStates.forEach(state => {
+      if(state.el.parentNode) {
+        state.el.parentNode.removeChild(state.el);
+      }
+    });
+    policeStates.length = 0;
+  }
+
+  function init() {
+    const padding = 50;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    playerX = width / 2;
+    playerY = height / 2;
+
+    removeAllThieves();
+    removeAllPolice();
+    createThief();
+
+    robotX = playerX + robotMinDist;
+    robotY = playerY;
+
+    running = true;
+
+    clearInterval(countdownInterval);
+    clearInterval(spawnInterval);
+    gameOver.style.display = 'none';
+    restartBtn.style.display = 'none';
+    gameOver.textContent = '';
+    timerDisplay.textContent = gameDuration;
+    timerDisplay.style.display = 'block';
+
+    player.style.left = `${playerX}px`;
+    player.style.top = `${playerY}px`;
+
+    robot.style.left = `${robotX}px`;
+    robot.style.top = `${robotY}px`;
+
+    document.body.style.cursor = 'none';
+
+    spawnInterval = setInterval(() => {
+      if (!running) return;
+      createThief();
+    }, 5000);
+
+    startCountdown();
+    animate();
+  }
+
+  window.addEventListener('keydown', e => {
+    const key = e.key.toLowerCase();
+    if (keys.hasOwnProperty(key)) {
+      keys[key] = true;
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('keyup', e => {
+    const key = e.key.toLowerCase();
+    if (keys.hasOwnProperty(key)) {
+      keys[key] = false;
+      e.preventDefault();
+    }
+  });
+
+  function animate() {
+    if (!running) return;
+
+    // WASD로 사람 이동
+    let moveX = 0, moveY = 0;
+    if (keys.w) moveY -= 1;
+    if (keys.s) moveY += 1;
+    if (keys.a) moveX -= 1;
+    if (keys.d) moveX += 1;
+
+    if (moveX !== 0 || moveY !== 0) {
+      const length = Math.sqrt(moveX*moveX + moveY*moveY);
+      moveX /= length;
+      moveY /= length;
+
+      playerX += moveX * playerSpeed;
+      playerY += moveY * playerSpeed;
+
+      // 화면 밖으로 못 나가게 제한
+      playerX = Math.min(window.innerWidth - 20, Math.max(20, playerX));
+      playerY = Math.min(window.innerHeight - 20, Math.max(20, playerY));
+    }
+
+    // 도둑 중 사람과 너무 가까운 도둑 체크
+    let closeThief = null;
+    for (let thief of thiefStates) {
+      if (getDistance(playerX, playerY, thief.x, thief.y) < 120) {
+        closeThief = thief;
+        break;
+      }
+    }
+
+    // 로봇 움직임 결정
+    if (closeThief) {
+      // 도둑 쪽으로 빠르게 이동 (로봇 속도 12)
+      const dx = closeThief.x - robotX;
+      const dy = closeThief.y - robotY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > 1) {
+        robotX += (dx / dist) * 12;
+        robotY += (dy / dist) * 12;
+      }
+    } else {
+      // 도둑이 가까이 없으면 사람 주변 40~60px 유지
+
+      let dx = robotX - playerX;
+      let dy = robotY - playerY;
+      let dist = Math.sqrt(dx*dx + dy*dy);
+
+      if (dist > robotMaxDist) {
+        const angle = Math.atan2(playerY - robotY, playerX - robotX);
+        robotX += Math.cos(angle) * robotSpeed;
+        robotY += Math.sin(angle) * robotSpeed;
+      } else if (dist < robotMinDist) {
+        const angle = Math.atan2(dy, dx);
+        robotX = playerX + Math.cos(angle) * robotMinDist;
+        robotY = playerY + Math.sin(angle) * robotMinDist;
+      } else {
+        const targetDist = (robotMinDist + robotMaxDist) / 2;
+        const angle = Math.atan2(dy, dx);
+        const desiredX = playerX + Math.cos(angle) * targetDist;
+        const desiredY = playerY + Math.sin(angle) * targetDist;
+
+        robotX += (desiredX - robotX) * 0.1;
+        robotY += (desiredY - robotY) * 0.1;
+      }
+    }
+
+    // 도둑 움직임 처리
+    thiefStates.forEach(state => {
+      if (state.isBouncing) {
+        const bounceSpeed = 7;
+        state.x += state.bounceDirX * bounceSpeed;
+        state.y += state.bounceDirY * bounceSpeed;
+      } else {
+        const dxT = playerX - state.x;
+        const dyT = playerY - state.y;
+        const distT = Math.sqrt(dxT*dxT + dyT*dyT);
+        const speedT = 3;
+
+        // 도둑과 로봇 거리 제한 + 튕기기
+        const distRT = getDistance(robotX, robotY, state.x, state.y);
+        if (distRT < 50) {
+          if (!state.isBouncing) {
+            const angleRT = Math.atan2(state.y - robotY, state.x - robotX);
+            state.bounceDirX = Math.cos(angleRT);
+            state.bounceDirY = Math.sin(angleRT);
+            state.isBouncing = true;
+            if(state.bounceTimeout) clearTimeout(state.bounceTimeout);
+            state.bounceTimeout = setTimeout(() => {
+              state.isBouncing = false;
+              state.bounceTimeout = null;
+            }, bounceDuration);
+          }
+        } else if (!state.isBouncing) {
+          if (distT > 1) {
+            state.x += (dxT / distT) * speedT;
+            state.y += (dyT / distT) * speedT;
+          }
+        }
+      }
+    });
+
+    // 도둑이 사람 잡으면 종료
+    for(let i=0; i<thiefStates.length; i++) {
+      if (getDistance(playerX, playerY, thiefStates[i].x, thiefStates[i].y) < 30) {
+        endGame(false);
+        return;
+      }
+    }
+
+    player.style.left = `${playerX}px`;
+    player.style.top = `${playerY}px`;
+    robot.style.left = `${robotX}px`;
+    robot.style.top = `${robotY}px`;
+    thiefStates.forEach(state => {
+      state.el.style.left = `${state.x}px`;
+      state.el.style.top = `${state.y}px`;
+    });
+    policeStates.forEach(state => {
+      state.el.style.left = `${state.x}px`;
+      state.el.style.top = `${state.y}px`;
+    });
+
+    animationId = requestAnimationFrame(animate);
+  }
+
+  function startCountdown() {
+    let timeLeft = gameDuration;
+    timerDisplay.textContent = timeLeft;
+    countdownInterval = setInterval(() => {
+      timeLeft--;
+      timerDisplay.textContent = timeLeft;
+      if (timeLeft <= 0) {
+        clearInterval(countdownInterval);
+        spawnPoliceAndEnd();
+      }
+    }, 1000);
+  }
+
+  function spawnPoliceAndEnd() {
+    removeAllPolice();
+    const policeCount = 5;
+    for(let i=0; i<policeCount; i++) {
+      createPolice();
+    }
+    endGame(true);
+  }
+
+  function endGame(timeOut) {
+    running = false;
+    cancelAnimationFrame(animationId);
+    clearInterval(countdownInterval);
+    clearInterval(spawnInterval);
+    timerDisplay.style.display = 'none';
+
+    document.body.style.cursor = 'default';
+
+    if (timeOut) {
+      gameOver.textContent = '🚓 경찰 도착! 시민을 지켜냈습니다! 🎉';
+    } else {
+      gameOver.textContent = '💥 게임 종료!\n도둑이 사람을 잡았습니다.';
+    }
+    gameOver.style.display = 'block';
+    restartBtn.style.display = 'block';
+  }
+
+  restartBtn.addEventListener('click', () => {
+    init();
+  });
+
+  init();
+
+  window.addEventListener('resize', () => {
+    if (!running) return;
+    init();
+  });
+</script>
+
+</body>
+</html>
